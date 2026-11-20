@@ -7,16 +7,29 @@ import React, { useState, useEffect } from 'react';
 import { BattleEngine } from '../game/battleEngine.ts';
 import { ShellType } from '../types.ts';
 import { soundEngine } from '../game/audio.ts';
-import { Shield, Crosshair, Wrench, Flame, Eye, Volume2, VolumeX, Users, Zap, Map as MapIcon, ChevronDown, ChevronUp } from 'lucide-react';
+import { Shield, Crosshair, Wrench, Flame, Eye, Volume2, VolumeX, Users, Zap, Map as MapIcon, ChevronDown, ChevronUp, Monitor, Smartphone, Lock, Unlock } from 'lucide-react';
 import { detectDevice } from '../utils/device.ts';
 import { MobileControls } from './MobileControls.tsx';
 
 interface BattleHUDProps {
   engine: BattleEngine;
+  isTouchMode: boolean;
+  isPointerLocked: boolean;
+  pointerLockBlocked: boolean;
+  onRequestMouseLock: () => void;
+  onToggleTouchMode: () => void;
   onExitBattle: () => void;
 }
 
-export const BattleHUD: React.FC<BattleHUDProps> = ({ engine, onExitBattle }) => {
+export const BattleHUD: React.FC<BattleHUDProps> = ({
+  engine,
+  isTouchMode,
+  isPointerLocked,
+  pointerLockBlocked,
+  onRequestMouseLock,
+  onToggleTouchMode,
+  onExitBattle,
+}) => {
   const [, setTick] = useState(0);
   const [showRoster, setShowRoster] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
@@ -106,8 +119,8 @@ export const BattleHUD: React.FC<BattleHUDProps> = ({ engine, onExitBattle }) =>
   const playerHpRatio = player ? Math.max(0, player.currentHP / player.maxHP) : 1;
   const speedKmh = player ? Math.round(Math.abs(player.speed) * 3.6) : 0;
 
-  // Minimap size based on device
-  const isTouchDevice = deviceInfo.isMobile || deviceInfo.hasTouch;
+  // Minimap size based on active control mode (PC vs Touch)
+  const isTouchDevice = isTouchMode;
   const minimapPx = isTouchDevice ? 130 : 190;
 
   // Minimap scale parameters (1000m map mapped to square)
@@ -234,10 +247,39 @@ export const BattleHUD: React.FC<BattleHUDProps> = ({ engine, onExitBattle }) =>
         )}
       </div>
 
-      {/* TOP-RIGHT BUTTONS (Mute, Leave, Roster) */}
+      {/* TOP-RIGHT BUTTONS (Mode Switch, Mouse Lock, Roster, Mute, Leave) */}
       <div className="absolute top-2 right-2 sm:right-4 flex items-center gap-1.5 pointer-events-auto">
+        {!isTouchDevice && !isPointerLocked && !pointerLockBlocked && (
+          <button
+            onClick={(e) => {
+              e.currentTarget.blur();
+              onRequestMouseLock();
+            }}
+            className="bg-amber-600/90 hover:bg-amber-500 text-neutral-950 border border-amber-400 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded flex items-center gap-1 text-[10px] sm:text-xs font-bold cursor-pointer shadow-lg"
+            title="Увімкнути захоплення миші [M]"
+          >
+            <Lock className="w-3.5 h-3.5" />
+            <span className="hidden md:inline">Mouse Lock [M]</span>
+          </button>
+        )}
+
         <button
-          onClick={() => setShowRoster((v) => !v)}
+          onClick={(e) => {
+            e.currentTarget.blur();
+            onToggleTouchMode();
+          }}
+          className="bg-neutral-900/90 hover:bg-neutral-800 text-neutral-300 hover:text-white border border-neutral-700 px-2 py-1 sm:py-1.5 rounded flex items-center gap-1 text-[10px] sm:text-xs font-medium cursor-pointer"
+          title={isTouchDevice ? 'Перемкнути на ПК керування' : 'Перемкнути на сенсорне керування'}
+        >
+          {isTouchDevice ? <Monitor className="w-3.5 h-3.5 text-sky-400" /> : <Smartphone className="w-3.5 h-3.5 text-amber-400" />}
+          <span className="hidden lg:inline">{isTouchDevice ? 'ПК' : 'Сенсор'}</span>
+        </button>
+
+        <button
+          onClick={(e) => {
+            e.currentTarget.blur();
+            setShowRoster((v) => !v);
+          }}
           className="bg-neutral-900/90 hover:bg-neutral-800 text-neutral-300 hover:text-white border border-neutral-700 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded flex items-center gap-1 text-[10px] sm:text-xs font-medium cursor-pointer"
           title="Склад команд"
         >
@@ -246,7 +288,10 @@ export const BattleHUD: React.FC<BattleHUDProps> = ({ engine, onExitBattle }) =>
         </button>
 
         <button
-          onClick={handleMuteToggle}
+          onClick={(e) => {
+            e.currentTarget.blur();
+            handleMuteToggle();
+          }}
           className="bg-neutral-900/90 hover:bg-neutral-800 text-neutral-300 hover:text-white border border-neutral-700 p-1 sm:p-1.5 rounded cursor-pointer"
           title="Звук"
         >
@@ -254,7 +299,10 @@ export const BattleHUD: React.FC<BattleHUDProps> = ({ engine, onExitBattle }) =>
         </button>
 
         <button
-          onClick={onExitBattle}
+          onClick={(e) => {
+            e.currentTarget.blur();
+            onExitBattle();
+          }}
           className="bg-rose-900/80 hover:bg-rose-800 text-rose-200 border border-rose-700 px-2 sm:px-3 py-1 sm:py-1.5 rounded text-[10px] sm:text-xs font-bold cursor-pointer"
         >
           Ангар
@@ -491,7 +539,8 @@ export const BattleHUD: React.FC<BattleHUDProps> = ({ engine, onExitBattle }) =>
                 return (
                   <button
                     key={type}
-                    onClick={() => {
+                    onClick={(e) => {
+                      e.currentTarget.blur();
                       if (player) player.activeShell = type;
                     }}
                     className={`px-2.5 py-1.5 rounded-lg flex flex-col items-center gap-0.5 border cursor-pointer transition-all ${
@@ -514,7 +563,10 @@ export const BattleHUD: React.FC<BattleHUDProps> = ({ engine, onExitBattle }) =>
             {player && (
               <div className="flex items-center gap-1.5 bg-neutral-900/90 border border-neutral-700/80 p-1.5 rounded-xl">
                 <button
-                  onClick={() => engine.useConsumable('repairKit')}
+                  onClick={(e) => {
+                    e.currentTarget.blur();
+                    engine.useConsumable('repairKit');
+                  }}
                   className={`px-2 py-1.5 rounded-lg flex flex-col items-center border cursor-pointer text-[10px] ${
                     player.consumableCooldowns.repairKit > 0
                       ? 'bg-neutral-900 border-neutral-800 text-neutral-500'
@@ -536,7 +588,10 @@ export const BattleHUD: React.FC<BattleHUDProps> = ({ engine, onExitBattle }) =>
                 </button>
 
                 <button
-                  onClick={() => engine.useConsumable('medKit')}
+                  onClick={(e) => {
+                    e.currentTarget.blur();
+                    engine.useConsumable('medKit');
+                  }}
                   className={`px-2 py-1.5 rounded-lg flex flex-col items-center border cursor-pointer text-[10px] ${
                     player.consumableCooldowns.medKit > 0
                       ? 'bg-neutral-900 border-neutral-800 text-neutral-500'
@@ -555,7 +610,10 @@ export const BattleHUD: React.FC<BattleHUDProps> = ({ engine, onExitBattle }) =>
                 </button>
 
                 <button
-                  onClick={() => engine.useConsumable('fireExtinguisher')}
+                  onClick={(e) => {
+                    e.currentTarget.blur();
+                    engine.useConsumable('fireExtinguisher');
+                  }}
                   className={`px-2 py-1.5 rounded-lg flex flex-col items-center border cursor-pointer text-[10px] ${
                     player.consumableCooldowns.fireExtinguisher > 0
                       ? 'bg-neutral-900 border-neutral-800 text-neutral-500'
@@ -679,19 +737,39 @@ export const BattleHUD: React.FC<BattleHUDProps> = ({ engine, onExitBattle }) =>
 
       {/* 6. BOTTOM CONTROL HINT DOCK (Desktop only) */}
       {!isTouchDevice && (
-        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 pointer-events-auto">
-          <div className="bg-neutral-900/90 border border-neutral-700/80 rounded-lg px-4 py-1.5 flex items-center gap-4 text-[11px] text-neutral-300 shadow-xl">
+        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 pointer-events-auto max-w-[54vw]">
+          <div className="bg-neutral-900/90 border border-neutral-700/80 rounded-lg px-3 py-1.5 flex flex-wrap items-center justify-center gap-x-2.5 gap-y-1 text-[10px] xl:text-[11px] text-neutral-300 shadow-xl">
+            {isPointerLocked ? (
+              <span className="flex items-center gap-1 text-emerald-400 font-bold">
+                <Lock className="w-3 h-3" />
+                Миша захоплена [ESC]
+              </span>
+            ) : pointerLockBlocked ? (
+              <span className="flex items-center gap-1 text-amber-300 font-bold">
+                <Unlock className="w-3 h-3" />
+                Вільний приціл мишею
+              </span>
+            ) : (
+              <button
+                onClick={(e) => {
+                  e.currentTarget.blur();
+                  onRequestMouseLock();
+                }}
+                className="flex items-center gap-1 bg-amber-600/25 hover:bg-amber-600/40 border border-amber-500/70 text-amber-300 font-bold px-2 py-0.5 rounded cursor-pointer"
+              >
+                <Lock className="w-3 h-3" />
+                Mouse Lock [M]
+              </button>
+            )}
+            <span className="text-neutral-600">|</span>
             <span><strong className="text-amber-400">WASD</strong> Рух</span>
-            <span>•</span>
-            <span><strong className="text-amber-400">Миша</strong> Наведення</span>
-            <span>•</span>
-            <span><strong className="text-amber-400">ЛКМ</strong> Постріл</span>
-            <span>•</span>
-            <span><strong className="text-amber-400">Shift / ПКМ</strong> Снайпер</span>
-            <span>•</span>
-            <span><strong className="text-amber-400">1, 2, 3</strong> Снаряди</span>
-            <span>•</span>
-            <span><strong className="text-amber-400">Tab</strong> Команди</span>
+            <span><strong className="text-amber-400">Миша</strong> Приціл</span>
+            <span><strong className="text-amber-400">ЛКМ/F</strong> Постріл</span>
+            <span><strong className="text-amber-400">Space</strong> Ручник</span>
+            <span><strong className="text-amber-400">Shift/ПКМ</strong> Снайпер</span>
+            <span><strong className="text-amber-400">1-3</strong> Снаряди</span>
+            <span><strong className="text-amber-400">4-6</strong> Спорядж.</span>
+            <span><strong className="text-amber-400">Tab</strong> 15v15</span>
           </div>
         </div>
       )}

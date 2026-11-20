@@ -30,7 +30,32 @@ export const BattleView: React.FC<BattleViewProps> = ({
   const [engine, setEngine] = useState<BattleEngine | null>(null);
   const [battleSummary, setBattleSummary] = useState<BattleSummary | null>(null);
   const [isPointerLocked, setIsPointerLocked] = useState<boolean>(false);
+  const [isControlsDismissed, setIsControlsDismissed] = useState<boolean>(false);
+  const [pointerLockBlocked, setPointerLockBlocked] = useState<boolean>(false);
+  const [isTouchMode, setIsTouchMode] = useState<boolean>(() => {
+    const dev = detectDevice();
+    return dev.isMobile || dev.isTablet;
+  });
   const engineRef = useRef<BattleEngine | null>(null);
+  const rendererDomRef = useRef<HTMLCanvasElement | null>(null);
+  const lastTouchTimeRef = useRef<number>(0);
+  const lastMousePosRef = useRef<{ x: number; y: number } | null>(null);
+  const edgeTurnDirRef = useRef<number>(0);
+
+  const requestMouseLock = () => {
+    const el = rendererDomRef.current;
+    if (!el) return;
+    try {
+      const result = el.requestPointerLock() as unknown as Promise<void> | undefined;
+      if (result && typeof result.catch === 'function') {
+        result.catch(() => {
+          setPointerLockBlocked(true);
+        });
+      }
+    } catch {
+      setPointerLockBlocked(true);
+    }
+  };
 
   useEffect(() => {
     if (!mountRef.current) return;
@@ -40,7 +65,6 @@ export const BattleView: React.FC<BattleViewProps> = ({
 
     soundEngine.init();
 
-    // Software WebGL detection
     const isSoftwareGl = (() => {
       const gl = document.createElement('canvas').getContext('webgl2');
       if (!gl) return true;
@@ -70,13 +94,12 @@ export const BattleView: React.FC<BattleViewProps> = ({
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     container.appendChild(renderer.domElement);
+    rendererDomRef.current = renderer.domElement;
 
-    // Studio Environment Reflections
     const pmrem = new THREE.PMREMGenerator(renderer);
     scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
     pmrem.dispose();
 
-    // Natural Outdoor Sun & Sky Lighting Rig
     const sunLight = new THREE.DirectionalLight(0xfffaed, 2.4);
     sunLight.position.set(280, 450, 200);
     sunLight.castShadow = !isSoftwareGl;
@@ -95,7 +118,6 @@ export const BattleView: React.FC<BattleViewProps> = ({
     const hemiLight = new THREE.HemisphereLight(0x9fc5e8, 0x48583c, 1.1);
     scene.add(hemiLight);
 
-    // Instantiate Battle Engine
     const battleEngine = new BattleEngine(
       scene,
       camera,
@@ -113,7 +135,6 @@ export const BattleView: React.FC<BattleViewProps> = ({
     engineRef.current = battleEngine;
     setEngine(battleEngine);
 
-    // Animation & Physics Loop
     let animId = 0;
     let lastTime = performance.now();
 
@@ -138,6 +159,11 @@ export const BattleView: React.FC<BattleViewProps> = ({
       const dt = (now - lastTime) * 0.001;
       lastTime = now;
 
+      // Edge-turn helper when running in fallback cursor-aim mode (e.g., restricted iframe)
+      if (edgeTurnDirRef.current !== 0 && !document.pointerLockElement) {
+        battleEngine.mouseLookDelta.x += edgeTurnDirRef.current * 480 * Math.min(dt, 0.05);
+      }
+
       battleEngine.update(dt);
       renderer.render(scene, camera);
 
@@ -154,16 +180,23 @@ export const BattleView: React.FC<BattleViewProps> = ({
       animId = requestAnimationFrame(loop);
     }
 
-    // Input Handlers: Keyboard
+    // Input Handlers: PC Keyboard
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.code)) {
+        e.preventDefault();
+      }
       battleEngine.keys[e.code] = true;
 
-      // Toggle Sniper mode on Shift
       if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
         battleEngine.isSniperMode = !battleEngine.isSniperMode;
         if (!battleEngine.isSniperMode) {
           battleEngine.sniperZoomLevel = 1;
         }
+      }
+
+      // Keyboard fire fallback (F) for trackpad PC players
+      if (e.code === 'KeyF') {
+        battleEngine.isFiringRequested = true;
       }
 
       // Quick flip recovery on R
@@ -173,48 +206,114 @@ export const BattleView: React.FC<BattleViewProps> = ({
         battleEngine.player.roll = 0;
         battleEngine.player.flipTimer = 0;
       }
+
+      // Toggle/request Mouse Lock on M
+      if (e.code === 'KeyM') {
+        if (document.pointerLockElement === renderer.domElement) {
+          document.exitPointerLock();
+        } else {
+          setIsControlsDismissed(true);
+          requestMouseLock();
+        }
+      }
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
       battleEngine.keys[e.code] = false;
     };
 
-    // Mouse Pointer Lock & Aiming
+    const handleBlur = () => {
+      battleEngine.keys = {};
+      edgeTurnDirRef.current = 0;
+    };
+
+    // Touch vs Mouse detection so hybrid touch-laptops work seamlessly with mouse
+    const handleTouchStartGlobal = () => {
+      lastTouchTimeRef.current = performance.now();
+    };
+
+    // Pointer Lock & Mouse Aiming
     const handlePointerLockChange = () => {
-      setIsPointerLocked(document.pointerLockElement === renderer.domElement);
+      const locked = document.pointerLockElement === renderer.domElement;
+      setIsPointerLocked(locked);
+      if (locked) {
+        setIsControlsDismissed(true);
+        setPointerLockBlocked(false);
+        edgeTurnDirRef.current = 0;
+      }
+    };
+
+    const handlePointerLockError = () => {
+      setPointerLockBlocked(true);
+      setIsPointerLocked(false);
     };
 
     const handleMouseMove = (e: MouseEvent) => {
+      // Ignore simulated mouse move right after touch
+      if (performance.now() - lastTouchTimeRef.current < 600) return;
+
       if (document.pointerLockElement === renderer.domElement) {
         battleEngine.mouseLookDelta.x += e.movementX;
         battleEngine.mouseLookDelta.y += e.movementY;
+        edgeTurnDirRef.current = 0;
+        return;
+      }
+
+      // Fallback PC mouse-aiming when controls are active without Pointer Lock (e.g. iframe restriction)
+      if (isControlsDismissedRef.current) {
+        if (lastMousePosRef.current) {
+          const dx = e.clientX - lastMousePosRef.current.x;
+          const dy = e.clientY - lastMousePosRef.current.y;
+          battleEngine.mouseLookDelta.x += dx * 1.35;
+          battleEngine.mouseLookDelta.y += dy * 1.15;
+        }
+        lastMousePosRef.current = { x: e.clientX, y: e.clientY };
+
+        const w = window.innerWidth;
+        if (e.clientX < w * 0.06) edgeTurnDirRef.current = -1;
+        else if (e.clientX > w * 0.94) edgeTurnDirRef.current = 1;
+        else edgeTurnDirRef.current = 0;
       }
     };
 
     const handleMouseDown = (e: MouseEvent) => {
-      // Ignore mouse events on mobile/touch devices to prevent inadvertent firing
-      if (detectDevice().isMobile || detectDevice().hasTouch) {
+      // Ignore browser-synthesized mouse events from mobile touch taps
+      if (performance.now() - lastTouchTimeRef.current < 700) {
+        return;
+      }
+      // Only handle clicks targeted at the 3D battle canvas (ignore HUD buttons)
+      if (e.target !== renderer.domElement) {
         return;
       }
 
-      if (document.pointerLockElement !== renderer.domElement) {
-        renderer.domElement.requestPointerLock();
-        return;
+      // Blur any previously focused HUD button so Spacebar doesn't trigger it
+      if (document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
+
+      setIsTouchMode(false);
+      setIsControlsDismissed(true);
+
+      const locked = document.pointerLockElement === renderer.domElement;
+      if (!locked && !pointerLockBlockedRef.current) {
+        requestMouseLock();
+        // If lock wasn't already active, also fire if already playing in fallback or just lock
+        if (!isControlsDismissedRef.current) return;
       }
 
       if (e.button === 0) {
-        // Left Click -> Fire gun
         battleEngine.isFiringRequested = true;
       } else if (e.button === 2) {
-        // Right Click -> Toggle sniper zoom
         e.preventDefault();
         battleEngine.isSniperMode = !battleEngine.isSniperMode;
+        if (!battleEngine.isSniperMode) {
+          battleEngine.sniperZoomLevel = 1;
+        }
       }
     };
 
     const handleWheel = (e: WheelEvent) => {
       if (battleEngine.isSniperMode) {
-        // Cycle zoom in sniper mode
         if (e.deltaY < 0) {
           battleEngine.sniperZoomLevel = Math.min(8, battleEngine.sniperZoomLevel * 2);
         } else {
@@ -225,7 +324,6 @@ export const BattleView: React.FC<BattleViewProps> = ({
           }
         }
       } else {
-        // Third person distance
         if (e.deltaY < 0 && battleEngine.cameraDistance <= 7) {
           battleEngine.isSniperMode = true;
           battleEngine.sniperZoomLevel = 2;
@@ -254,7 +352,10 @@ export const BattleView: React.FC<BattleViewProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
+    window.addEventListener('touchstart', handleTouchStartGlobal, { passive: true });
     document.addEventListener('pointerlockchange', handlePointerLockChange);
+    document.addEventListener('pointerlockerror', handlePointerLockError);
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mousedown', handleMouseDown);
     window.addEventListener('wheel', handleWheel, { passive: true });
@@ -264,7 +365,10 @@ export const BattleView: React.FC<BattleViewProps> = ({
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
+      window.removeEventListener('touchstart', handleTouchStartGlobal);
       document.removeEventListener('pointerlockchange', handlePointerLockChange);
+      document.removeEventListener('pointerlockerror', handlePointerLockError);
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mousedown', handleMouseDown);
       window.removeEventListener('wheel', handleWheel);
@@ -274,6 +378,7 @@ export const BattleView: React.FC<BattleViewProps> = ({
       cancelAnimationFrame(animId);
       clearTimeout(animId);
       battleEngine.dispose();
+      rendererDomRef.current = null;
 
       if (renderer.domElement && container.contains(renderer.domElement)) {
         container.removeChild(renderer.domElement);
@@ -282,32 +387,35 @@ export const BattleView: React.FC<BattleViewProps> = ({
     };
   }, [playerTank, selectedMap]);
 
-  const deviceInfo = detectDevice();
-  const isTouchDevice = deviceInfo.isMobile || deviceInfo.hasTouch;
+  const isControlsDismissedRef = useRef(isControlsDismissed);
+  isControlsDismissedRef.current = isControlsDismissed;
+  const pointerLockBlockedRef = useRef(pointerLockBlocked);
+  pointerLockBlockedRef.current = pointerLockBlocked;
 
   return (
     <div className="relative w-full h-screen overflow-hidden select-none bg-neutral-950 font-sans">
       {/* 3D Battle Canvas Container */}
       <div ref={mountRef} className="absolute inset-0 w-full h-full cursor-crosshair" />
 
-      {/* Pointer Lock Helper overlay (Desktop only) */}
-      {!isTouchDevice && !isPointerLocked && !battleSummary && (
+      {/* Pointer Lock / PC Start Helper Overlay (Desktop & Laptops) */}
+      {!isTouchMode && !isPointerLocked && !isControlsDismissed && !battleSummary && (
         <div
           onClick={() => {
-            const canvas = mountRef.current?.querySelector('canvas');
-            canvas?.requestPointerLock();
+            setIsControlsDismissed(true);
+            requestMouseLock();
           }}
-          className="absolute inset-0 bg-black/40 flex items-center justify-center cursor-pointer z-40 backdrop-blur-none"
+          className="absolute inset-0 bg-black/45 flex items-center justify-center cursor-pointer z-40 backdrop-blur-none"
         >
-          <div className="bg-neutral-900/95 border border-amber-500/80 rounded-xl px-8 py-5 text-center shadow-2xl flex flex-col items-center gap-2 max-w-md">
+          <div className="bg-neutral-900/95 border border-amber-500/80 rounded-xl px-8 py-5 text-center shadow-2xl flex flex-col items-center gap-2.5 max-w-lg">
             <span className="text-xl font-black text-amber-400 uppercase tracking-wider">
-              Керування Боєм
+              Керування на ПК (Mouse Lock)
             </span>
             <p className="text-xs text-neutral-300">
-              Натисніть на екран, щоб активувати поворот камери та наведення гармати мишею.
+              Натисніть сюди, щоб увімкнути захоплення миші та наведення гармати на 360°.
+              Натисніть <strong className="text-white">ESC</strong>, щоб звільнити курсор.
             </p>
-            <div className="mt-2 text-[11px] text-amber-300 font-bold border-t border-neutral-700 pt-2">
-              ЛКМ — Постріл • Shift / ПКМ — Снайпер • WASD — Рух • Space — Ручник
+            <div className="mt-1 text-[11px] text-amber-300 font-bold border-t border-neutral-700 pt-2.5 leading-relaxed">
+              WASD / Стрілки — Рух · ЛКМ / F — Постріл · Shift / ПКМ — Снайпер · Space — Ручник · 1-3 Снаряди · 4-6 Спорядження
             </div>
           </div>
         </div>
@@ -317,6 +425,14 @@ export const BattleView: React.FC<BattleViewProps> = ({
       {engine && (
         <BattleHUD
           engine={engine}
+          isTouchMode={isTouchMode}
+          isPointerLocked={isPointerLocked}
+          pointerLockBlocked={pointerLockBlocked}
+          onRequestMouseLock={() => {
+            setIsControlsDismissed(true);
+            requestMouseLock();
+          }}
+          onToggleTouchMode={() => setIsTouchMode((v) => !v)}
           onExitBattle={() => onExitToHangar(battleSummary || undefined)}
         />
       )}
