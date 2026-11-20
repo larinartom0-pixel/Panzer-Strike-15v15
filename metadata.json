@@ -1,0 +1,6 @@
+{
+  "name": "Panzer Strike 15v15: World of Tanks 3D",
+  "description": "3D tactical tank warfare game featuring realistic ballistics, deep module upgrades, and massive 15v15 team battles with AI bots and base capture.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
